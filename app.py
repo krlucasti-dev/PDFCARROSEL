@@ -4,6 +4,8 @@ import pdfplumber
 import zipfile
 import io
 import re
+import urllib.request
+import os
 from PIL import Image, ImageDraw, ImageFont
 
 # --- FUNÇÕES DE EXTRAÇÃO E PROCESSAMENTO DE DADOS ---
@@ -46,8 +48,8 @@ def extrair_dados_pdf(uploaded_file):
                         atividade = "Missa" 
                         comunidade = ""
                         
-                        # Isolar o Presidente
-                        match_pres = re.search(r"(Pe\.|Sem\.|Diác\.|Pé).+$", resto_linha, re.IGNORECASE)
+                        # Isolar o Presidente (Corrigido para não quebrar a palavra Pompéu)
+                        match_pres = re.search(r"(Pe\.|Sem\.|Diác\.)\s+.+$", resto_linha, re.IGNORECASE)
                         if match_pres:
                             presidente = match_pres.group(0).strip()
                             resto_linha = resto_linha.replace(presidente, "").strip()
@@ -80,18 +82,31 @@ def extrair_dados_pdf(uploaded_file):
 
 # --- FUNÇÕES DE GERAÇÃO DE IMAGENS ---
 
-def desenhar_tabela(draw, x, y, cabecalhos, linha_dados, largura_colunas, cor_fundo, cor_texto):
-    """Desenha uma única linha da tabela na imagem."""
-    fonte = ImageFont.load_default() 
-    draw.rectangle([x, y, x + sum(largura_colunas), y + 30], fill=cor_fundo)
+def carregar_fonte(tamanho):
+    """Transfere uma fonte TTF moderna (Roboto) para evitar falhas de codificação."""
+    font_path = "Roboto-Regular.ttf"
+    if not os.path.exists(font_path):
+        url = "https://github.com/googlefonts/roboto/raw/main/src/hinted/Roboto-Regular.ttf"
+        try:
+            urllib.request.urlretrieve(url, font_path)
+        except Exception:
+            return ImageFont.load_default()
+    try:
+        return ImageFont.truetype(font_path, tamanho)
+    except Exception:
+        return ImageFont.load_default()
+
+def desenhar_tabela(draw, x, y, cabecalhos, linha_dados, largura_colunas, cor_fundo, cor_texto, fonte, altura_linha):
+    """Desenha uma única linha da tabela na imagem ajustada à fonte."""
+    draw.rectangle([x, y, x + sum(largura_colunas), y + altura_linha], fill=cor_fundo)
     
     x_atual = x
     for i, texto in enumerate(linha_dados):
-        draw.text((x_atual + 5, y + 5), str(texto), font=fonte, fill=cor_texto)
+        draw.text((x_atual + 15, y + 15), str(texto), font=fonte, fill=cor_texto)
         x_atual += largura_colunas[i]
 
 def gerar_imagens(df):
-    """Gera as imagens empilhando múltiplos dias na mesma foto até preencher o espaço vertical."""
+    """Gera as imagens empilhando múltiplos dias na mesma foto, com tamanhos corrigidos."""
     imagens = []
     
     largura = 1080
@@ -101,29 +116,32 @@ def gerar_imagens(df):
     verde_claro = (232, 245, 233) 
     branco = (255, 255, 255)
     
-    fonte_titulo = ImageFont.load_default()
+    fonte_titulo = carregar_fonte(28)
+    fonte_tabela = carregar_fonte(22)
+    fonte_rodape = carregar_fonte(20)
+    
+    altura_linha = 55
+    altura_cabecalho_dia = 60
     
     def novo_slide():
         """Cria um canvas em branco com a cor de fundo e o rodapé."""
         img = Image.new('RGB', (largura, altura), color=fundo_creme)
         draw = ImageDraw.Draw(img)
-        draw.text((50, altura - 50), "ESCALA DE MISSAS · NOVEMBRO DE 2026", font=fonte_titulo, fill=verde_escuro)
+        draw.text((50, altura - 70), "ESCALA DE MISSAS · NOVEMBRO DE 2026", font=fonte_rodape, fill=verde_escuro)
         return img, draw, 50 
         
     img_atual, draw_atual, y_atual = novo_slide()
     
     dias_unicos = df['Dia'].unique()
     cabecalhos = ["HORA", "COMUNIDADE", "ATIVIDADE", "PRESIDENTE"]
-    largura_colunas = [80, 420, 260, 200]
+    largura_colunas = [100, 430, 250, 200] 
     
     for dia in dias_unicos:
         eventos_do_dia = df[df['Dia'] == dia].to_dict('records')
         
-        # Estimar espaço que este dia vai ocupar: Título (40) + Cabeçalhos (30) + (linhas * 30) + margem (40)
-        altura_estimada = 40 + 30 + (len(eventos_do_dia) * 30) + 40
+        altura_estimada = altura_cabecalho_dia + altura_linha + (len(eventos_do_dia) * altura_linha) + 40
         
-        # Se não couber e a imagem não estiver vazia, cria nova imagem
-        if y_atual + altura_estimada > 1250 and y_atual > 50:
+        if y_atual + altura_estimada > 1200 and y_atual > 50:
             imagens.append(img_atual)
             img_atual, draw_atual, y_atual = novo_slide()
             
@@ -134,45 +152,43 @@ def gerar_imagens(df):
             titulo_texto = f"{dia} (Continuação)" if continuacao else dia
             
             # Desenhar faixa do dia
-            draw_atual.rectangle([50, y_atual, largura - 50, y_atual + 40], fill=verde_escuro)
+            draw_atual.rectangle([50, y_atual, largura - 50, y_atual + altura_cabecalho_dia], fill=verde_escuro)
             
             # Centralizar o título na faixa
             try:
                 bbox = draw_atual.textbbox((0, 0), titulo_texto, font=fonte_titulo)
                 w_texto = bbox[2] - bbox[0]
             except AttributeError:
-                w_texto = len(titulo_texto) * 6 
+                w_texto = len(titulo_texto) * 15 
                 
             x_texto = (largura - w_texto) / 2
-            draw_atual.text((x_texto, y_atual + 12), titulo_texto, font=fonte_titulo, fill=branco)
-            y_atual += 40
+            draw_atual.text((x_texto, y_atual + 15), titulo_texto, font=fonte_titulo, fill=branco)
+            y_atual += altura_cabecalho_dia
             
             # Desenhar cabeçalhos das colunas
-            desenhar_tabela(draw_atual, 50, y_atual, cabecalhos, cabecalhos, largura_colunas, verde_escuro, branco)
-            y_atual += 30
+            desenhar_tabela(draw_atual, 50, y_atual, cabecalhos, cabecalhos, largura_colunas, verde_escuro, branco, fonte_tabela, altura_linha)
+            y_atual += altura_linha
             
             # Preencher as linhas
             eventos_processados = 0
             for i, evento in enumerate(eventos_restantes):
-                if y_atual > 1220: # Limite inferior de segurança antes do rodapé
+                if y_atual > 1150: 
                     break
                     
                 cor_fundo = verde_claro if i % 2 == 0 else branco
                 linha_dados = [evento['Hora'], evento['Comunidade'], evento['Atividade'], evento['Presidente']]
-                desenhar_tabela(draw_atual, 50, y_atual, cabecalhos, linha_dados, largura_colunas, cor_fundo, verde_escuro)
-                y_atual += 30
+                desenhar_tabela(draw_atual, 50, y_atual, cabecalhos, linha_dados, largura_colunas, cor_fundo, verde_escuro, fonte_tabela, altura_linha)
+                y_atual += altura_linha
                 eventos_processados += 1
             
             eventos_restantes = eventos_restantes[eventos_processados:]
-            y_atual += 40 # Margem extra após o dia
+            y_atual += 40 
             
             if eventos_restantes:
-                # Se ainda sobrou evento, finaliza este slide e cria outro
                 imagens.append(img_atual)
                 img_atual, draw_atual, y_atual = novo_slide()
                 continuacao = True
                 
-    # Adicionar o último slide gerado
     if y_atual > 50:
         imagens.append(img_atual)
         
@@ -191,7 +207,7 @@ st.title("Gerador de Escalas de Missas")
 uploaded_file = st.file_uploader("Escolher ficheiro PDF", type="pdf")
 
 if uploaded_file is not None:
-    st.write("Processando o PDF...")
+    st.write("A processar o PDF...")
     df, texto_bruto = extrair_dados_pdf(uploaded_file)
     
     if not df.empty:
@@ -199,7 +215,7 @@ if uploaded_file is not None:
         df_editado = st.data_editor(df, num_rows="dynamic")
         
         if st.button("Gerar Imagens"):
-            with st.spinner("Gerando imagens..."):
+            with st.spinner("A gerar imagens..."):
                 zip_data = gerar_imagens(df_editado)
                 st.download_button(label="Descarregar ZIP", data=zip_data, file_name="escalas.zip", mime="application/zip")
     else:
