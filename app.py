@@ -5,26 +5,30 @@ import pdfplumber
 import zipfile
 import io
 import re
-import calendar
 import unicodedata
+import calendar
+import math
 
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 
 
-# ============================================================
-# CONFIGURAÇÃO DA APLICAÇÃO
-# ============================================================
+# ==========================================================
+# CONFIGURAÇÕES
+# ==========================================================
 
 st.set_page_config(
-    page_title="Gerador de Escalas",
+    page_title="Escalas de Celebrações",
     page_icon="⛪",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-LARGURA = 1080
-ALTURA = 1350
+W, H = 1080, 1350
+
+CREME = (253, 251, 247)
+VERDE = (30, 86, 49)
+VERDE_CLARO = (232, 245, 233)
+BRANCO = (255, 255, 255)
 
 MESES = [
     "Janeiro", "Fevereiro", "Março", "Abril",
@@ -32,194 +36,141 @@ MESES = [
     "Setembro", "Outubro", "Novembro", "Dezembro"
 ]
 
-DIAS = [
-    "DOMINGO", "SEGUNDA", "TERÇA", "QUARTA",
-    "QUINTA", "SEXTA", "SÁBADO"
+COLUNAS = [
+    "Dia", "Hora", "Comunidade",
+    "Atividade", "Presidente"
 ]
 
-ATIVIDADES = [
-    "Adoração ao Santíssimo",
-    "Celebração Eucarística",
-    "Celebração da Palavra",
-    "Missa e Novena",
-    "Missa",
-    "Batizados",
-    "Casamento",
-    "Confissão",
-    "Novena",
-    "Terço",
-    "Adoração"
-]
+LARGURAS = [100, 430, 250, 200]
 
 
-# ============================================================
+# ==========================================================
 # FONTES
-# ============================================================
+# ==========================================================
 
-def carregar_fonte(tamanho, negrito=False):
+def fonte(tamanho, negrito=False):
 
-    caminhos = []
-
-    if negrito:
-        caminhos = [
+    arquivos = (
+        [
             "C:/Windows/Fonts/arialbd.ttf",
-            "C:/Windows/Fonts/calibrib.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
         ]
-    else:
-        caminhos = [
+        if negrito else
+        [
             "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/calibri.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
         ]
+    )
 
-    for caminho in caminhos:
+    for arquivo in arquivos:
         try:
-            return ImageFont.truetype(caminho, tamanho)
-        except (OSError, IOError):
-            continue
+            return ImageFont.truetype(arquivo, tamanho)
+        except OSError:
+            pass
 
     return ImageFont.load_default()
 
 
-# ============================================================
-# FUNÇÕES AUXILIARES DE TEXTO
-# ============================================================
+# ==========================================================
+# TRATAMENTO DE TEXTO
+# ==========================================================
 
 def normalizar(texto):
+
     texto = str(texto).strip().lower()
 
     return "".join(
-        caractere
-        for caractere in unicodedata.normalize("NFD", texto)
-        if unicodedata.category(caractere) != "Mn"
+        c for c in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(c) != "Mn"
     )
 
 
-def limpar_texto(texto):
+def limpar(texto):
 
-    texto = str(texto)
-
-    texto = re.sub(r"\s+", " ", texto)
-
-    texto = texto.strip(" |;,-\t")
-
-    return texto
+    return re.sub(
+        r"\s+",
+        " ",
+        str(texto)
+    ).strip(" |;\t")
 
 
-def quebrar_texto(texto, fonte, largura, draw):
+def largura_texto(draw, texto, f):
+
+    return draw.textbbox(
+        (0, 0), str(texto), font=f
+    )[2]
+
+
+def quebrar_linhas(draw, texto, f, limite):
 
     palavras = str(texto).split()
-
     linhas = []
-    linha_atual = ""
+    atual = ""
 
     for palavra in palavras:
 
-        tentativa = (
-            palavra if not linha_atual
-            else linha_atual + " " + palavra
+        teste = (
+            atual + " " + palavra
+            if atual else palavra
         )
 
-        largura_texto = draw.textbbox(
-            (0, 0), tentativa, font=fonte
-        )[2]
-
-        if largura_texto <= largura:
-            linha_atual = tentativa
-
+        if largura_texto(draw, teste, f) <= limite:
+            atual = teste
         else:
-            if linha_atual:
-                linhas.append(linha_atual)
+            if atual:
+                linhas.append(atual)
+            atual = palavra
 
-            linha_atual = palavra
+    if atual:
+        linhas.append(atual)
 
-    if linha_atual:
-        linhas.append(linha_atual)
-
-    return linhas
-
-
-def desenhar_texto_multilinha(
-    draw,
-    texto,
-    posicao,
-    fonte,
-    cor,
-    largura_maxima,
-    max_linhas=2,
-    espacamento=8
-):
-
-    x, y = posicao
-
-    linhas = quebrar_texto(
-        texto,
-        fonte,
-        largura_maxima,
-        draw
-    )
-
-    if len(linhas) > max_linhas:
-        linhas = linhas[:max_linhas]
-
-        ultima = linhas[-1]
-
-        while ultima and draw.textbbox(
-            (0, 0), ultima + "...", font=fonte
-        )[2] > largura_maxima:
-            ultima = ultima[:-1]
-
-        linhas[-1] = ultima.rstrip() + "..."
-
-    for linha in linhas:
-
-        draw.text(
-            (x, y),
-            linha,
-            font=fonte,
-            fill=cor
-        )
-
-        altura_linha = draw.textbbox(
-            (0, 0), linha, font=fonte
-        )[3]
-
-        y += altura_linha + espacamento
-
-    return y
+    return linhas or [""]
 
 
-# ============================================================
-# EXTRAÇÃO DO PDF
-# ============================================================
+# ==========================================================
+# IDENTIFICAÇÃO DOS DIAS
+# ==========================================================
 
 def identificar_dia(linha):
 
     padrao = (
-        r"\b(DOMINGO|SEGUNDA(?:[- ]FEIRA)?|"
-        r"TERÇA(?:[- ]FEIRA)?|QUARTA(?:[- ]FEIRA)?|"
-        r"QUINTA(?:[- ]FEIRA)?|SEXTA(?:[- ]FEIRA)?|"
-        r"SÁBADO)\b"
-        r".*?(?:DIA\s*)?(\d{1,2})\b"
+        r"\b(DOMINGO|SEGUNDA(?:\s*[-–]?\s*FEIRA)?|"
+        r"TERÇA(?:\s*[-–]?\s*FEIRA)?|"
+        r"QUARTA(?:\s*[-–]?\s*FEIRA)?|"
+        r"QUINTA(?:\s*[-–]?\s*FEIRA)?|"
+        r"SEXTA(?:\s*[-–]?\s*FEIRA)?|SÁBADO)\b"
+        r"\s*[-–]?\s*DIA\s*(\d{1,2})"
+        r"(?:\s*[-–]\s*(.*))?"
     )
 
     resultado = re.search(
-        padrao,
-        linha,
-        re.IGNORECASE
+        padrao, linha, re.IGNORECASE
     )
 
     if not resultado:
         return None
 
-    dia = resultado.group(1).upper()
-    numero = resultado.group(2)
+    nome = limpar(resultado.group(1)).upper()
+    numero = int(resultado.group(2))
+    observacao = limpar(resultado.group(3) or "")
 
-    return f"{dia} - DIA {int(numero):02d}"
+    nome = re.sub(
+        r"\s*[-–]?\s*FEIRA$",
+        " FEIRA",
+        nome
+    )
 
+    titulo = f"{nome} – DIA {numero:02d}"
+
+    if observacao:
+        titulo += f" – {observacao}"
+
+    return titulo
+
+
+# ==========================================================
+# IDENTIFICAÇÃO DOS EVENTOS
+# ==========================================================
 
 def identificar_horario(linha):
 
@@ -231,564 +182,623 @@ def identificar_horario(linha):
     if not resultado:
         return None, None
 
-    hora = resultado.group(1)
-    restante = resultado.group(2)
+    hora = re.sub(
+        r"\s+", "", resultado.group(1)
+    ).lower()
 
-    hora = re.sub(r"\s+", "", hora).lower()
+    hora = hora.replace(":", "h")
 
-    if ":" in hora:
-        hora = hora.replace(":", "h")
-
-    return hora, restante.strip()
+    return hora, limpar(resultado.group(2))
 
 
 def identificar_presidente(texto):
 
     padrao = (
-        r"\b(Pe\.?|Padre|Sem\.?|Seminarista|"
+        r"\b(Pe\.?|Pé\.?|Padre|Sem\.?|Seminarista|"
         r"Diác\.?|Diácono|Dom)\s*"
+        r"[A-ZÁÉÍÓÚÂÊÔÃÕÇ].*$"
     )
 
     resultado = re.search(
-        padrao,
-        texto,
-        re.IGNORECASE
+        padrao, texto, re.IGNORECASE
     )
 
     if not resultado:
-        return "", texto
+        return "", limpar(texto)
 
-    presidente = limpar_texto(
+    presidente = limpar(
         texto[resultado.start():]
     )
 
-    restante = limpar_texto(
+    restante = limpar(
         texto[:resultado.start()]
     )
 
     return presidente, restante
 
 
+ATIVIDADES = [
+    "Adoração ao Santíssimo Sacramento",
+    "Adoração ao Santíssimo",
+    "Celebração da Palavra",
+    "Missa e Novena",
+    "Celebração Eucarística",
+    "Missa (Normalistas)",
+    "Missa",
+    "Batizados",
+    "Casamento",
+    "Confissão",
+    "Novena",
+    "Terço",
+    "Adoração"
+]
+
+
 def identificar_atividade(texto):
 
-    texto_normalizado = normalizar(texto)
+    texto_norm = normalizar(texto)
 
-    atividades_ordenadas = sorted(
+    for atividade in sorted(
         ATIVIDADES,
         key=len,
         reverse=True
+    ):
+
+        atividade_norm = normalizar(atividade)
+
+        posicao = texto_norm.find(atividade_norm)
+
+        if posicao == -1:
+            continue
+
+        inicio = posicao
+        fim = posicao + len(atividade)
+
+        nome = texto[inicio:fim]
+
+        restante = limpar(
+            texto[:inicio] + " " + texto[fim:]
+        )
+
+        # Preserva complementos como (Normalistas)
+        complemento = re.match(
+            r"^\s*(\([^)]*\))",
+            restante
+        )
+
+        if complemento:
+            nome += " " + complemento.group(1)
+            restante = limpar(
+                restante[complemento.end():]
+            )
+
+        return limpar(nome), restante
+
+    return "Missa", limpar(texto)
+
+
+def processar_linha_evento(linha, dia):
+
+    hora, restante = identificar_horario(linha)
+
+    if not hora:
+        return None
+
+    presidente, restante = identificar_presidente(
+        restante
     )
 
-    for atividade in atividades_ordenadas:
+    atividade, comunidade = identificar_atividade(
+        restante
+    )
 
-        atividade_normalizada = normalizar(atividade)
+    # Limpeza de resíduos comuns
+    comunidade = limpar(comunidade)
 
-        posicao = texto_normalizado.find(
-            atividade_normalizada
-        )
-
-        if posicao >= 0:
-
-            inicio = posicao
-            fim = posicao + len(atividade)
-
-            atividade_encontrada = texto[inicio:fim]
-
-            restante = (
-                texto[:inicio] + " " + texto[fim:]
-            )
-
-            return (
-                limpar_texto(atividade_encontrada),
-                limpar_texto(restante)
-            )
-
-    return "Missa", limpar_texto(texto)
+    return {
+        "Dia": dia,
+        "Hora": hora,
+        "Comunidade": comunidade,
+        "Atividade": atividade,
+        "Presidente": presidente
+    }
 
 
-def extrair_dados_pdf(arquivo):
+# ==========================================================
+# EXTRAÇÃO DO PDF
+# ==========================================================
 
-    dados = []
+def extrair_pdf(arquivo):
+
+    eventos = []
     texto_bruto = ""
     dia_atual = None
+    ultimo_evento = None
 
-    try:
+    with pdfplumber.open(arquivo) as pdf:
 
-        arquivo.seek(0)
+        for pagina in pdf.pages:
 
-        with pdfplumber.open(arquivo) as pdf:
+            texto = pagina.extract_text(
+                x_tolerance=3,
+                y_tolerance=3
+            )
 
-            for pagina in pdf.pages:
+            if not texto:
+                continue
 
-                texto = pagina.extract_text()
+            texto_bruto += texto + "\n"
 
-                if not texto:
-                    continue
+            for linha_original in texto.splitlines():
 
-                texto_bruto += (
-                    texto + "\n--- FIM DA PÁGINA ---\n"
+                linha = limpar(
+                    linha_original.replace("|", " ")
                 )
 
-                for linha in texto.split("\n"):
+                if not linha:
+                    continue
 
-                    linha = limpar_texto(
-                        linha.replace("|", "")
-                    )
+                dia = identificar_dia(linha)
 
-                    if not linha:
-                        continue
+                if dia:
+                    dia_atual = dia
+                    ultimo_evento = None
+                    continue
 
-                    # Identifica o dia da semana
-                    dia_encontrado = identificar_dia(
-                        linha
-                    )
+                # Ignora cabeçalhos e rodapés
+                if re.search(
+                    r"HORA\s+COMUNIDADE|"
+                    r"PARÓQUIA NOSSA SENHORA|"
+                    r"ARQUIDIOCESE|"
+                    r"PRAÇA GETÚLIO|"
+                    r"TELEFONE:|E-MAIL:",
+                    linha,
+                    re.IGNORECASE
+                ):
+                    continue
 
-                    if dia_encontrado:
-                        dia_atual = dia_encontrado
-                        continue
+                if not dia_atual:
+                    continue
 
-                    # Identifica o horário
-                    hora, restante = identificar_horario(
-                        linha
-                    )
+                evento = processar_linha_evento(
+                    linha,
+                    dia_atual
+                )
 
-                    if not hora or not dia_atual:
-                        continue
+                if evento:
 
-                    # Identifica o presidente
+                    eventos.append(evento)
+                    ultimo_evento = evento
+
+                elif ultimo_evento:
+
+                    # Trata texto que continua na linha seguinte
                     presidente, restante = (
-                        identificar_presidente(restante)
+                        identificar_presidente(linha)
                     )
 
-                    # Identifica a atividade
-                    atividade, comunidade = (
-                        identificar_atividade(restante)
-                    )
-
-                    dados.append({
-                        "Dia": dia_atual,
-                        "Hora": hora,
-                        "Comunidade": comunidade,
-                        "Atividade": atividade,
-                        "Presidente": presidente
-                    })
-
-    except Exception as erro:
-
-        st.error(
-            f"Erro ao processar o PDF: {erro}"
-        )
-
-    colunas = [
-        "Dia",
-        "Hora",
-        "Comunidade",
-        "Atividade",
-        "Presidente"
-    ]
+                    if presidente:
+                        ultimo_evento["Presidente"] = (
+                            presidente
+                        )
+                    elif "santissimo" in normalizar(
+                        ultimo_evento["Atividade"]
+                    ):
+                        ultimo_evento["Atividade"] = (
+                            limpar(
+                                ultimo_evento["Atividade"]
+                                + " " + linha
+                            )
+                        )
 
     return pd.DataFrame(
-        dados,
-        columns=colunas
+        eventos,
+        columns=COLUNAS
     ), texto_bruto
 
 
-# ============================================================
-# CORES E ELEMENTOS VISUAIS
-# ============================================================
+# ==========================================================
+# ALTURA DOS BLOCOS
+# ==========================================================
 
-def converter_cor(hexadecimal):
+def altura_linha(evento, draw):
 
-    hexadecimal = hexadecimal.lstrip("#")
+    f = fonte(22)
 
-    return tuple(
-        int(hexadecimal[i:i+2], 16)
-        for i in (0, 2, 4)
-    )
+    textos = [
+        evento["Hora"],
+        evento["Comunidade"],
+        evento["Atividade"],
+        evento["Presidente"]
+    ]
 
+    alturas = []
 
-def clarear_cor(cor, quantidade=0.90):
+    for i, texto in enumerate(textos):
 
-    return tuple(
-        int(c + (255 - c) * quantidade)
-        for c in cor
-    )
+        limite = LARGURAS[i] - 24
 
-
-def desenhar_cabecalho(
-    draw,
-    titulo,
-    mes,
-    ano,
-    cor_principal
-):
-
-    branco = (255, 255, 255)
-    fonte_pequena = carregar_fonte(27)
-    fonte_titulo = carregar_fonte(48, True)
-
-    draw.rectangle(
-        [0, 0, LARGURA, 270],
-        fill=cor_principal
-    )
-
-    draw.text(
-        (75, 65),
-        "PROGRAMAÇÃO PAROQUIAL",
-        font=fonte_pequena,
-        fill=(220, 235, 225)
-    )
-
-    draw.text(
-        (75, 112),
-        titulo,
-        font=fonte_titulo,
-        fill=branco
-    )
-
-    draw.text(
-        (78, 190),
-        f"{mes.upper()} DE {ano}",
-        font=fonte_pequena,
-        fill=(220, 235, 225)
-    )
-
-
-def desenhar_rodape(
-    draw,
-    numero,
-    total,
-    cor_principal
-):
-
-    fonte = carregar_fonte(23)
-
-    draw.line(
-        [(65, 1270), (1015, 1270)],
-        fill=(220, 220, 220),
-        width=2
-    )
-
-    draw.text(
-        (70, 1290),
-        "IGREJA MATRIZ",
-        font=fonte,
-        fill=cor_principal
-    )
-
-    texto_pagina = f"{numero:02d} / {total:02d}"
-
-    largura = draw.textbbox(
-        (0, 0),
-        texto_pagina,
-        font=fonte
-    )[2]
-
-    draw.text(
-        (1010 - largura, 1290),
-        texto_pagina,
-        font=fonte,
-        fill=cor_principal
-    )
-
-
-# ============================================================
-# CAPA DO CARROSSEL
-# ============================================================
-
-def criar_capa(
-    df,
-    mes,
-    ano,
-    cor_principal
-):
-
-    imagem = Image.new(
-        "RGB",
-        (LARGURA, ALTURA),
-        (250, 249, 245)
-    )
-
-    draw = ImageDraw.Draw(imagem)
-
-    branco = (255, 255, 255)
-
-    fonte_chamada = carregar_fonte(29)
-    fonte_titulo = carregar_fonte(75, True)
-    fonte_mes = carregar_fonte(48)
-    fonte_info = carregar_fonte(28)
-
-    # Fundo superior
-    draw.rectangle(
-        [0, 0, LARGURA, 850],
-        fill=cor_principal
-    )
-
-    draw.rectangle(
-        [0, 820, LARGURA, 850],
-        fill=clarear_cor(cor_principal, 0.55)
-    )
-
-    draw.text(
-        (85, 160),
-        "IGREJA MATRIZ",
-        font=fonte_chamada,
-        fill=(220, 235, 225)
-    )
-
-    draw.text(
-        (80, 310),
-        "Escala de",
-        font=fonte_titulo,
-        fill=branco
-    )
-
-    draw.text(
-        (80, 405),
-        "Celebrações",
-        font=fonte_titulo,
-        fill=branco
-    )
-
-    draw.text(
-        (85, 550),
-        f"{mes} de {ano}",
-        font=fonte_mes,
-        fill=(230, 240, 232)
-    )
-
-    # Cartão de informações
-    draw.rounded_rectangle(
-        [65, 930, 1015, 1150],
-        radius=30,
-        fill=branco
-    )
-
-    total_eventos = len(df)
-    total_dias = df["Dia"].nunique()
-
-    draw.text(
-        (105, 975),
-        f"{total_eventos} celebrações programadas",
-        font=fonte_info,
-        fill=cor_principal
-    )
-
-    draw.text(
-        (105, 1040),
-        f"{total_dias} dias de programação",
-        font=fonte_info,
-        fill=(100, 100, 100)
-    )
-
-    draw.text(
-        (85, 1220),
-        "Confira os horários e locais das celebrações",
-        font=carregar_fonte(23),
-        fill=(100, 100, 100)
-    )
-
-    return imagem
-
-
-# ============================================================
-# SLIDES DAS CELEBRAÇÕES
-# ============================================================
-
-def criar_slide(
-    dia,
-    eventos,
-    mes,
-    ano,
-    numero_slide,
-    total_slides,
-    cor_principal
-):
-
-    imagem = Image.new(
-        "RGB",
-        (LARGURA, ALTURA),
-        (250, 249, 245)
-    )
-
-    draw = ImageDraw.Draw(imagem)
-
-    cor_clara = clarear_cor(
-        cor_principal,
-        0.90
-    )
-
-    branco = (255, 255, 255)
-    cinza = (105, 105, 105)
-
-    desenhar_cabecalho(
-        draw,
-        "Celebrações",
-        mes,
-        ano,
-        cor_principal
-    )
-
-    fonte_dia = carregar_fonte(34, True)
-    fonte_hora = carregar_fonte(34, True)
-    fonte_comunidade = carregar_fonte(30, True)
-    fonte_info = carregar_fonte(23)
-
-    draw.text(
-        (70, 305),
-        dia,
-        font=fonte_dia,
-        fill=cor_principal
-    )
-
-    y = 380
-
-    altura_cartao = 155
-    espacamento = 20
-
-    for evento in eventos:
-
-        draw.rounded_rectangle(
-            [
-                60,
-                y,
-                1020,
-                y + altura_cartao
-            ],
-            radius=22,
-            fill=branco
-        )
-
-        # Identificação do horário
-        draw.rounded_rectangle(
-            [
-                80,
-                y + 25,
-                230,
-                y + 130
-            ],
-            radius=18,
-            fill=cor_clara
-        )
-
-        draw.text(
-            (105, y + 60),
-            str(evento["Hora"]),
-            font=fonte_hora,
-            fill=cor_principal
-        )
-
-        # Comunidade
-        draw.text(
-            (260, y + 18),
-            str(evento["Comunidade"]) or "Comunidade não informada",
-            font=fonte_comunidade,
-            fill=cor_principal
-        )
-
-        # Atividade
-        desenhar_texto_multilinha(
+        linhas = quebrar_linhas(
             draw,
-            evento["Atividade"],
-            (260, y + 65),
-            fonte_info,
-            cinza,
-            710,
-            max_linhas=1
+            texto if texto else "-",
+            f,
+            limite
         )
 
-        # Presidente
-        presidente = str(
-            evento["Presidente"]
-        ).strip()
+        alturas.append(len(linhas))
 
-        if presidente:
+    quantidade = max(alturas)
 
-            desenhar_texto_multilinha(
-                draw,
-                presidente,
-                (260, y + 103),
-                fonte_info,
-                cinza,
-                710,
-                max_linhas=1
-            )
+    return max(55, 24 + quantidade * 29)
 
-        y += altura_cartao + espacamento
 
-    desenhar_rodape(
-        draw,
-        numero_slide,
-        total_slides,
-        cor_principal
+def altura_dia(dia, eventos, draw):
+
+    altura_titulo = 58
+    altura_colunas = 57
+    espacamento = 38
+
+    altura_eventos = sum(
+        altura_linha(evento, draw)
+        for evento in eventos
     )
 
-    return imagem
-
-
-# ============================================================
-# GERAÇÃO DO CARROSSEL
-# ============================================================
-
-def gerar_carrossel(
-    df,
-    mes,
-    ano,
-    cor_hex,
-    eventos_por_slide=5
-):
-
-    cor_principal = converter_cor(cor_hex)
-
-    imagens = []
-
-    # Capa
-    imagens.append(
-        criar_capa(
-            df,
-            mes,
-            ano,
-            cor_principal
-        )
+    return (
+        altura_titulo
+        + altura_colunas
+        + altura_eventos
+        + espacamento
     )
 
-    # Agrupa os eventos por dia
-    dias_unicos = df["Dia"].drop_duplicates().tolist()
+
+# ==========================================================
+# AGRUPAMENTO AUTOMÁTICO DOS DIAS
+# ==========================================================
+
+def agrupar_dias(df):
+
+    draw = ImageDraw.Draw(
+        Image.new("RGB", (W, H))
+    )
 
     grupos = []
 
-    for dia in dias_unicos:
+    for dia in df["Dia"].drop_duplicates():
 
         eventos = df[
             df["Dia"] == dia
         ].to_dict("records")
 
-        for inicio in range(
-            0,
-            len(eventos),
-            eventos_por_slide
+        grupos.append((dia, eventos))
+
+    paginas = []
+    pagina_atual = []
+    altura_atual = 90
+
+    altura_disponivel = 1120
+
+    for dia, eventos in grupos:
+
+        altura = altura_dia(
+            dia, eventos, draw
+        )
+
+        if pagina_atual and (
+            altura_atual + altura > altura_disponivel
         ):
 
-            grupos.append((
+            paginas.append(pagina_atual)
+            pagina_atual = []
+            altura_atual = 90
+
+        # Dias muito grandes podem ocupar mais de uma imagem.
+        # Nesse caso, divide os eventos em blocos.
+        if altura > altura_disponivel:
+
+            if pagina_atual:
+                paginas.append(pagina_atual)
+                pagina_atual = []
+                altura_atual = 90
+
+            bloco = []
+            altura_bloco = 90
+
+            for evento in eventos:
+
+                altura_evento = altura_linha(
+                    evento, draw
+                )
+
+                if (
+                    bloco
+                    and altura_bloco
+                    + altura_evento
+                    + 115
+                    > altura_disponivel
+                ):
+
+                    paginas.append([
+                        (dia, bloco)
+                    ])
+
+                    bloco = []
+                    altura_bloco = 90
+
+                bloco.append(evento)
+                altura_bloco += altura_evento
+
+            if bloco:
+                pagina_atual = [(dia, bloco)]
+                altura_atual = (
+                    altura_dia(dia, bloco, draw)
+                )
+
+        else:
+
+            pagina_atual.append(
+                (dia, eventos)
+            )
+
+            altura_atual += altura
+
+    if pagina_atual:
+        paginas.append(pagina_atual)
+
+    return paginas
+
+
+# ==========================================================
+# DESENHO DAS TABELAS
+# ==========================================================
+
+def desenhar_celula(
+    draw,
+    x,
+    y,
+    largura,
+    altura,
+    texto,
+    f,
+    cor_texto,
+    alinhamento="left"
+):
+
+    padding = 15
+
+    linhas = quebrar_linhas(
+        draw,
+        str(texto) if texto else "-",
+        f,
+        largura - padding * 2
+    )
+
+    altura_texto = len(linhas) * 29
+
+    y_texto = y + max(
+        8,
+        (altura - altura_texto) // 2
+    )
+
+    for linha in linhas:
+
+        largura_linha = largura_texto(
+            draw, linha, f
+        )
+
+        if alinhamento == "center":
+            x_texto = (
+                x + (largura - largura_linha) // 2
+            )
+        else:
+            x_texto = x + padding
+
+        draw.text(
+            (x_texto, y_texto),
+            linha,
+            font=f,
+            fill=cor_texto
+        )
+
+        y_texto += 29
+
+
+def desenhar_dia(draw, dia, eventos, y):
+
+    x = 50
+    largura_total = 980
+
+    # Título do dia
+    altura_titulo = 65
+
+    draw.rectangle(
+        [
+            x,
+            y,
+            x + largura_total,
+            y + altura_titulo
+        ],
+        fill=VERDE
+    )
+
+    f_titulo = fonte(29)
+
+    largura_titulo = largura_texto(
+        draw, dia, f_titulo
+    )
+
+    draw.text(
+        (
+            x + (largura_total - largura_titulo) // 2,
+            y + 17
+        ),
+        dia,
+        font=f_titulo,
+        fill=BRANCO
+    )
+
+    y += altura_titulo
+
+    # Cabeçalho das colunas
+    altura_cabecalho = 50
+
+    draw.rectangle(
+        [
+            x,
+            y,
+            x + largura_total,
+            y + altura_cabecalho
+        ],
+        fill=VERDE
+    )
+
+    cabecalhos = [
+        "HORA",
+        "COMUNIDADE",
+        "ATIVIDADE",
+        "PRESIDENTE"
+    ]
+
+    f_cabecalho = fonte(21)
+
+    x_atual = x
+
+    for i, texto in enumerate(cabecalhos):
+
+        desenhar_celula(
+            draw,
+            x_atual,
+            y,
+            LARGURAS[i],
+            altura_cabecalho,
+            texto,
+            f_cabecalho,
+            BRANCO
+        )
+
+        x_atual += LARGURAS[i]
+
+    y += altura_cabecalho
+
+    # Linhas dos eventos
+    f_dados = fonte(22)
+
+    for indice, evento in enumerate(eventos):
+
+        altura = altura_linha(evento, draw)
+
+        fundo = (
+            VERDE_CLARO
+            if indice % 2 == 0
+            else BRANCO
+        )
+
+        draw.rectangle(
+            [
+                x,
+                y,
+                x + largura_total,
+                y + altura
+            ],
+            fill=fundo
+        )
+
+        valores = [
+            evento["Hora"],
+            evento["Comunidade"],
+            evento["Atividade"],
+            evento["Presidente"]
+        ]
+
+        x_atual = x
+
+        for i, valor in enumerate(valores):
+
+            desenhar_celula(
+                draw,
+                x_atual,
+                y,
+                LARGURAS[i],
+                altura,
+                valor,
+                f_dados,
+                VERDE
+            )
+
+            x_atual += LARGURAS[i]
+
+        y += altura
+
+    return y + 38
+
+
+# ==========================================================
+# RODAPÉ
+# ==========================================================
+
+def desenhar_rodape(draw, mes, ano, numero, total):
+
+    draw.text(
+        (50, 1285),
+        f"ESCALA DE MISSAS · {mes.upper()} DE {ano}",
+        font=fonte(19),
+        fill=VERDE
+    )
+
+    pagina = f"{numero:02d} / {total:02d}"
+
+    largura = largura_texto(
+        draw,
+        pagina,
+        fonte(18)
+    )
+
+    draw.text(
+        (1030 - largura, 1285),
+        pagina,
+        font=fonte(18),
+        fill=VERDE
+    )
+
+
+# ==========================================================
+# GERAÇÃO DAS IMAGENS
+# ==========================================================
+
+def gerar_imagens(df, mes, ano):
+
+    paginas = agrupar_dias(df)
+
+    imagens = []
+
+    total = len(paginas)
+
+    for indice, grupos in enumerate(paginas):
+
+        imagem = Image.new(
+            "RGB",
+            (W, H),
+            CREME
+        )
+
+        draw = ImageDraw.Draw(imagem)
+
+        y = 50
+
+        for dia, eventos in grupos:
+
+            y = desenhar_dia(
+                draw,
                 dia,
-                eventos[
-                    inicio:inicio + eventos_por_slide
-                ]
-            ))
+                eventos,
+                y
+            )
 
-    total_slides = len(grupos) + 1
-
-    # Cria os slides
-    for indice, (dia, eventos) in enumerate(grupos):
-
-        imagem = criar_slide(
-            dia,
-            eventos,
+        desenhar_rodape(
+            draw,
             mes,
             ano,
-            indice + 2,
-            total_slides,
-            cor_principal
+            indice + 1,
+            total
         )
 
         imagens.append(imagem)
@@ -796,9 +806,9 @@ def gerar_carrossel(
     return imagens
 
 
-# ============================================================
+# ==========================================================
 # EXPORTAÇÃO ZIP
-# ============================================================
+# ==========================================================
 
 def gerar_zip(imagens):
 
@@ -808,21 +818,21 @@ def gerar_zip(imagens):
         buffer,
         "w",
         zipfile.ZIP_DEFLATED
-    ) as arquivo_zip:
+    ) as zip_file:
 
         for indice, imagem in enumerate(imagens):
 
-            imagem_buffer = io.BytesIO()
+            arquivo = io.BytesIO()
 
             imagem.save(
-                imagem_buffer,
+                arquivo,
                 format="PNG",
                 optimize=True
             )
 
-            arquivo_zip.writestr(
+            zip_file.writestr(
                 f"escala_{indice + 1:02d}.png",
-                imagem_buffer.getvalue()
+                arquivo.getvalue()
             )
 
     buffer.seek(0)
@@ -830,33 +840,25 @@ def gerar_zip(imagens):
     return buffer.getvalue()
 
 
-# ============================================================
-# INTERFACE STREAMLIT
-# ============================================================
+# ==========================================================
+# INTERFACE
+# ==========================================================
 
 st.markdown(
     """
     <style>
-        .block-container {
-            padding-top: 2rem;
-            padding-bottom: 3rem;
-            max-width: 1200px;
-        }
+    .block-container {
+        max-width: 1200px;
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+    }
 
-        h1 {
-            font-weight: 750;
-            letter-spacing: -1px;
-        }
+    h1 {
+        color: #1E5631;
+        font-weight: 700;
+        letter-spacing: -1px;
+    }
 
-        .subtitulo {
-            color: #777;
-            font-size: 16px;
-            margin-bottom: 25px;
-        }
-
-        div[data-testid="stFileUploader"] {
-            border-radius: 12px;
-        }
     </style>
     """,
     unsafe_allow_html=True
@@ -864,26 +866,19 @@ st.markdown(
 
 st.title("Gerador de Escalas")
 
-st.markdown(
-    '<p class="subtitulo">'
-    'Transforme PDFs de escalas de celebrações '
-    'em carrosséis prontos para o Instagram.'
-    '</p>',
-    unsafe_allow_html=True
+st.caption(
+    "Transforme a escala de celebrações em imagens "
+    "prontas para publicar no Instagram."
 )
-
-# ------------------------------------------------------------
-# CONFIGURAÇÕES LATERAIS
-# ------------------------------------------------------------
 
 with st.sidebar:
 
-    st.header("Personalização")
+    st.header("Configurações")
 
     hoje = datetime.now()
 
     mes = st.selectbox(
-        "Mês da escala",
+        "Mês",
         MESES,
         index=hoje.month - 1
     )
@@ -892,242 +887,173 @@ with st.sidebar:
         "Ano",
         min_value=2020,
         max_value=2100,
-        value=hoje.year,
-        step=1
-    )
-
-    cor_hex = st.color_picker(
-        "Cor principal",
-        "#1E5631"
-    )
-
-    eventos_por_slide = st.slider(
-        "Celebrações por slide",
-        min_value=3,
-        max_value=5,
-        value=5
+        value=hoje.year
     )
 
     st.divider()
 
     st.caption(
-        "Formato das imagens: 1080 × 1350 pixels"
+        "Formato: 1080 × 1350 pixels"
     )
 
-# ------------------------------------------------------------
-# UPLOAD
-# ------------------------------------------------------------
+    st.caption(
+        "Identidade visual: verde e creme"
+    )
 
-st.subheader("1. Enviar escala")
+
+st.subheader("1. Enviar PDF")
 
 arquivo_pdf = st.file_uploader(
-    "Selecione o PDF da escala de celebrações",
-    type=["pdf"],
-    help="Envie um PDF que contenha texto selecionável."
+    "Selecione a escala de celebrações",
+    type=["pdf"]
 )
 
 if arquivo_pdf:
 
-    with st.spinner("Lendo e analisando o PDF..."):
+    try:
 
-        df, texto_bruto = extrair_dados_pdf(
-            arquivo_pdf
-        )
+        with st.spinner("Analisando o documento..."):
 
-    if not df.empty:
-
-        st.success(
-            f"{len(df)} celebrações identificadas!"
-        )
-
-        st.subheader("2. Conferir informações")
-
-        st.info(
-            "Confira os dados extraídos. "
-            "Você pode editar qualquer campo antes de gerar "
-            "o carrossel."
-        )
-
-        df_editado = st.data_editor(
-            df,
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True,
-            key="editor_escalas"
-        )
-
-        st.caption(
-            "Atenção: confira principalmente os nomes das "
-            "comunidades e dos presidentes."
-        )
-
-        st.divider()
-
-        st.subheader("3. Gerar carrossel")
-
-        if st.button(
-            "Gerar imagens do carrossel",
-            type="primary",
-            use_container_width=True
-        ):
-
-            if df_editado.empty:
-
-                st.error(
-                    "Adicione pelo menos uma celebração."
-                )
-
-            else:
-
-                obrigatorias = [
-                    "Dia",
-                    "Hora",
-                    "Comunidade",
-                    "Atividade",
-                    "Presidente"
-                ]
-
-                if df_editado[
-                    obrigatorias
-                ].isnull().any().any():
-
-                    df_editado = df_editado.fillna("")
-
-                with st.spinner(
-                    "Criando as imagens..."
-                ):
-
-                    imagens = gerar_carrossel(
-                        df_editado,
-                        mes,
-                        int(ano),
-                        cor_hex,
-                        eventos_por_slide
-                    )
-
-                    arquivo_zip = gerar_zip(
-                        imagens
-                    )
-
-                st.session_state[
-                    "imagens_geradas"
-                ] = imagens
-
-                st.session_state[
-                    "arquivo_zip"
-                ] = arquivo_zip
-
-                st.success(
-                    f"Carrossel criado com "
-                    f"{len(imagens)} imagens!"
-                )
-
-        # ----------------------------------------------------
-        # RESULTADO
-        # ----------------------------------------------------
-
-        if "imagens_geradas" in st.session_state:
-
-            st.divider()
-
-            st.subheader("4. Visualizar carrossel")
-
-            imagens = st.session_state[
-                "imagens_geradas"
-            ]
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-
-                st.metric(
-                    "Total de imagens",
-                    len(imagens)
-                )
-
-            with col2:
-
-                st.metric(
-                    "Resolução",
-                    "1080 × 1350"
-                )
-
-            for indice, imagem in enumerate(imagens):
-
-                with st.expander(
-                    f"Imagem {indice + 1:02d}",
-                    expanded=(indice == 0)
-                ):
-
-                    st.image(
-                        imagem,
-                        use_container_width=True
-                    )
-
-                    buffer = io.BytesIO()
-
-                    imagem.save(
-                        buffer,
-                        format="PNG"
-                    )
-
-                    st.download_button(
-                        label="Baixar esta imagem",
-                        data=buffer.getvalue(),
-                        file_name=(
-                            f"escala_{indice + 1:02d}.png"
-                        ),
-                        mime="image/png",
-                        key=f"download_{indice}"
-                    )
-
-            st.divider()
-
-            st.download_button(
-                label="Baixar carrossel completo (ZIP)",
-                data=st.session_state["arquivo_zip"],
-                file_name="carrossel_escalas.zip",
-                mime="application/zip",
-                type="primary",
-                use_container_width=True
+            df, texto_bruto = extrair_pdf(
+                arquivo_pdf
             )
 
-    else:
+        if df.empty:
 
-        st.warning(
-            "Não foi possível identificar automaticamente "
-            "as celebrações neste PDF."
-        )
-
-        st.info(
-            "O PDF pode ser digitalizado como imagem ou "
-            "utilizar uma estrutura diferente da esperada."
-        )
-
-        with st.expander(
-            "Visualizar texto extraído para diagnóstico"
-        ):
+            st.warning(
+                "Nenhuma celebração foi identificada."
+            )
 
             st.text_area(
-                "Texto encontrado no PDF",
+                "Texto extraído do PDF",
                 texto_bruto,
-                height=350
+                height=300
             )
+
+        else:
+
+            st.success(
+                f"{len(df)} celebrações identificadas."
+            )
+
+            st.subheader("2. Conferir escala")
+
+            df_editado = st.data_editor(
+                df,
+                num_rows="dynamic",
+                use_container_width=True,
+                hide_index=True,
+                key="editor"
+            )
+
+            st.caption(
+                "Confira os nomes, horários e atividades "
+                "antes de gerar as imagens."
+            )
+
+            st.divider()
+
+            st.subheader("3. Gerar carrossel")
+
+            if st.button(
+                "Gerar imagens",
+                type="primary",
+                use_container_width=True
+            ):
+
+                obrigatorias = COLUNAS
+
+                df_final = df_editado.copy()
+
+                df_final = df_final.fillna("")
+
+                df_final = df_final[
+                    df_final["Dia"].astype(str).str.strip() != ""
+                ]
+
+                if df_final.empty:
+
+                    st.error(
+                        "Não existem celebrações para gerar."
+                    )
+
+                else:
+
+                    with st.spinner(
+                        "Montando as tabelas..."
+                    ):
+
+                        imagens = gerar_imagens(
+                            df_final,
+                            mes,
+                            int(ano)
+                        )
+
+                        zip_data = gerar_zip(imagens)
+
+                    st.session_state["imagens"] = imagens
+                    st.session_state["zip"] = zip_data
+
+                    st.success(
+                        f"{len(imagens)} imagens geradas!"
+                    )
+
+            if "imagens" in st.session_state:
+
+                st.divider()
+
+                st.subheader("4. Visualização")
+
+                imagens = st.session_state["imagens"]
+
+                st.write(
+                    f"Total de slides: {len(imagens)}"
+                )
+
+                for i, imagem in enumerate(imagens):
+
+                    with st.expander(
+                        f"Slide {i + 1}",
+                        expanded=(i == 0)
+                    ):
+
+                        st.image(
+                            imagem,
+                            use_container_width=True
+                        )
+
+                        buffer = io.BytesIO()
+
+                        imagem.save(
+                            buffer,
+                            format="PNG"
+                        )
+
+                        st.download_button(
+                            "Baixar imagem",
+                            data=buffer.getvalue(),
+                            file_name=f"escala_{i+1:02d}.png",
+                            mime="image/png",
+                            key=f"img_{i}"
+                        )
+
+                st.download_button(
+                    "Baixar carrossel completo (ZIP)",
+                    data=st.session_state["zip"],
+                    file_name="carrossel_escalas.zip",
+                    mime="application/zip",
+                    type="primary",
+                    use_container_width=True
+                )
+
+    except Exception as erro:
+
+        st.error(
+            f"Erro durante o processamento: {erro}"
+        )
 
 else:
 
-    st.markdown(
-        """
-        ### Como utilizar
-
-        1. Envie o PDF da escala.
-        2. Confira e corrija os dados identificados.
-        3. Escolha as cores e a quantidade de celebrações.
-        4. Gere e baixe as imagens do carrossel.
-        """
-    )
-
-    st.caption(
-        "Desenvolvido para facilitar a divulgação "
-        "das escalas de celebrações paroquiais."
+    st.info(
+        "Envie um PDF para começar a montar seu carrossel."
     )
