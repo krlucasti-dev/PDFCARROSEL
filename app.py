@@ -33,21 +33,22 @@ def extrair_dados_pdf(uploaded_file):
                     if not linha_limpa:
                         continue
                         
-                    # Ignorar textos repetitivos de cabeçalho/rodapé da paróquia que podem interferir
-                    if "PARÓQUIA" in linha_limpa.upper() or "E vos darei" in linha_limpa or "Praça Getúlio" in linha_limpa:
+                    # Filtro agressivo para ignorar cabeçalhos e rodapés
+                    linha_upper = linha_limpa.upper()
+                    ignorar = ["PARÓQUIA", "ARQUIDIOCESE", "FORANIA", "E VOS DAREI", "CONHECIMENTO", "PRAÇA GETÚLIO", "TELEFONE:", "ESCALA DE MISSAS", "SABAR", "DE N. SRA."]
+                    if any(x in linha_upper for x in ignorar):
                         continue
                     
                     # 1. Procurar cabeçalho do Dia
                     match_dia = re.search(r"(DOMINGO|SEGUNDA|TERÇA|QUARTA|QUINTA|SEXTA|SÁBADO).*DIA\s*\d+", linha_limpa, re.IGNORECASE)
                     if match_dia:
                         dia_atual = match_dia.group(0).upper()
-                        # Ao mudar de dia, guarda o último evento pendente (se houver)
                         if evento_atual:
                             eventos_brutos.append(evento_atual)
                             evento_atual = None
                         continue
                         
-                    # 2. Procurar evento pela Hora (Início de uma nova linha de evento)
+                    # 2. Procurar evento pela Hora
                     match_evento = re.search(r"^(\d{2}h\d{0,2})\s+(.+)", linha_limpa)
                     
                     if match_evento and dia_atual:
@@ -60,43 +61,37 @@ def extrair_dados_pdf(uploaded_file):
                             "Resto": match_evento.group(2).strip()
                         }
                     elif evento_atual:
-                        # Se não tem hora, é a continuação do evento da linha de cima (Ex: "Sacramento Pe. Fernando")
-                        if "Telefone:" not in linha_limpa:
-                            evento_atual["Resto"] += " " + linha_limpa
+                        evento_atual["Resto"] += " " + linha_limpa
                             
-            # Guardar o último evento após sair do loop das páginas
             if evento_atual:
                 eventos_brutos.append(evento_atual)
                 
     except Exception as e:
         st.error(f"Erro de leitura do PDF: {e}")
 
-    # Processar as linhas unidas e separar as colunas corretas
     dados_finais = []
-    palavras_chave_atividade = [
-        "Adoração ao Santíssimo Sacramento", "Adoração ao Santíssimo",
-        "Missa e Novena", "Celebração da Palavra", "Missa", "Batizados", "Casamento"
-    ]
     
     for evt in eventos_brutos:
         resto = evt["Resto"]
-        presidente = ""
-        atividade = "Missa"
-        comunidade = ""
         
-        # Isolar o Presidente identificando gralhas comuns (Pé, Pe sem ponto, PeHélio)
-        match_pres = re.search(r"(Pe\.|Sem\.|Diác\.|Diac\.|Pé\s+|PeHélio|Pe\s+).*$", resto, re.IGNORECASE)
+        # 1. Auto-correção de gralhas antes de extrair o presidente
+        resto = re.sub(r'Pé\s+', 'Pe. ', resto, flags=re.IGNORECASE)
+        resto = re.sub(r'PeHélio', 'Pe. Hélio', resto, flags=re.IGNORECASE)
+        resto = re.sub(r'Pé\s*Héli\s*o', 'Pe. Hélio', resto, flags=re.IGNORECASE)
+        
+        presidente = ""
+        # 2. Extrair APENAS o título + 1 nome (ex: "Pe. Fernando"), barrando a junção com lixo
+        match_pres = re.search(r"(Pe\.|Sem\.|Diác\.|Diac\.)\s+([A-Za-zÀ-ÿ]+)", resto, re.IGNORECASE)
         if match_pres:
-            pres_bruto = match_pres.group(0).strip()
-            resto = resto.replace(pres_bruto, "").strip()
+            presidente = match_pres.group(0).strip()
+            resto = resto.replace(presidente, "").strip()
             
-            # Auto-correção das falhas de digitação do PDF para a imagem final
-            presidente = re.sub(r'Pé\s+', 'Pe. ', pres_bruto, flags=re.IGNORECASE)
-            presidente = re.sub(r'PeHélio', 'Pe. Hélio', presidente, flags=re.IGNORECASE)
-            presidente = re.sub(r'Pé\s*Héli\s*o', 'Pe. Hélio', presidente, flags=re.IGNORECASE)
-            presidente = re.sub(r'\.$', '', presidente).strip()
-            
-        # Isolar a Atividade
+        # 3. Isolar a Atividade
+        atividade = "Missa"
+        palavras_chave_atividade = [
+            "Missa (Normalistas)", "Adoração ao Santíssimo Sacramento", "Adoração ao Santíssimo",
+            "Missa e Novena", "Celebração da Palavra", "Missa", "Batizados", "Casamento"
+        ]
         for palavra in palavras_chave_atividade:
             if palavra.lower() in resto.lower():
                 idx = resto.lower().find(palavra.lower())
@@ -104,8 +99,11 @@ def extrair_dados_pdf(uploaded_file):
                 resto = resto.replace(atividade, "").strip()
                 break
                 
-        # O que sobrar é a Comunidade
+        # 4. Comunidade é o que sobrou
         comunidade = resto.strip()
+        
+        # Limpeza final de pontuação arrastada
+        comunidade = re.sub(r'^\.$', '', comunidade).strip()
         
         dados_finais.append({
             "Dia": evt["Dia"],
@@ -269,7 +267,7 @@ if uploaded_file is not None:
     df, texto_bruto = extrair_dados_pdf(uploaded_file)
     
     if not df.empty:
-        st.success("Dados extraídos!")
+        st.success("Dados extraídos com sucesso! Revise na tabela abaixo:")
         df_editado = st.data_editor(df, num_rows="dynamic")
         
         if st.button("Gerar Imagens"):
