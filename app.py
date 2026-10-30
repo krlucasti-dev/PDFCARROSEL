@@ -25,18 +25,17 @@ def extrair_dados_pdf(uploaded_file):
                 linhas = text.split('\n')
                 
                 for linha in linhas:
-                    # Limpa caracteres de tabela e espaços excessivos
                     linha_limpa = linha.replace('|', '').strip()
                     if not linha_limpa:
                         continue
                     
-                    # 1. Procurar cabeçalho do Dia (Ex: "DOMINGO - DIA 01" ou "SEGUNDA FEIRA - DIA 02")
+                    # 1. Procurar cabeçalho do Dia
                     match_dia = re.search(r"(DOMINGO|SEGUNDA|TERÇA|QUARTA|QUINTA|SEXTA|SÁBADO).*DIA\s*\d+", linha_limpa, re.IGNORECASE)
                     if match_dia:
-                        dia_atual = match_dia.group(0).upper() # Pega apenas a parte do dia, ignorando restos
+                        dia_atual = match_dia.group(0).upper()
                         continue
                         
-                    # 2. Procurar evento pela Hora (Ex: começa com 07h, 19h30)
+                    # 2. Procurar evento pela Hora
                     match_evento = re.search(r"^(\d{2}h\d{0,2})\s+(.+)", linha_limpa)
                     
                     if match_evento and dia_atual:
@@ -44,10 +43,10 @@ def extrair_dados_pdf(uploaded_file):
                         resto_linha = match_evento.group(2).strip()
                         
                         presidente = ""
-                        atividade = "Missa" # Padrão caso não encontre outra
+                        atividade = "Missa" 
                         comunidade = ""
                         
-                        # Isolar o Presidente (Pe., Sem., Diác., Pé)
+                        # Isolar o Presidente
                         match_pres = re.search(r"(Pe\.|Sem\.|Diác\.|Pé).+$", resto_linha, re.IGNORECASE)
                         if match_pres:
                             presidente = match_pres.group(0).strip()
@@ -65,7 +64,6 @@ def extrair_dados_pdf(uploaded_file):
                                 resto_linha = resto_linha.replace(atividade, "").strip()
                                 break
                                 
-                        # O que sobrou é a Comunidade
                         comunidade = resto_linha.strip()
                         
                         dados_extraidos.append({
@@ -92,8 +90,10 @@ def desenhar_tabela(draw, x, y, cabecalhos, linha_dados, largura_colunas, cor_fu
         draw.text((x_atual + 5, y + 5), str(texto), font=fonte, fill=cor_texto)
         x_atual += largura_colunas[i]
 
-def criar_imagem_slide(dia, eventos, num_slide):
-    """Cria a imagem final para o carrossel do Instagram."""
+def gerar_imagens(df):
+    """Gera as imagens empilhando múltiplos dias na mesma foto até preencher o espaço vertical."""
+    imagens = []
+    
     largura = 1080
     altura = 1350
     fundo_creme = (253, 251, 247) 
@@ -101,50 +101,81 @@ def criar_imagem_slide(dia, eventos, num_slide):
     verde_claro = (232, 245, 233) 
     branco = (255, 255, 255)
     
-    img = Image.new('RGB', (largura, altura), color=fundo_creme)
-    draw = ImageDraw.Draw(img)
     fonte_titulo = ImageFont.load_default()
     
-    titulo_texto = dia
-    if num_slide > 1:
-        titulo_texto += " (Continuação)"
+    def novo_slide():
+        """Cria um canvas em branco com a cor de fundo e o rodapé."""
+        img = Image.new('RGB', (largura, altura), color=fundo_creme)
+        draw = ImageDraw.Draw(img)
+        draw.text((50, altura - 50), "ESCALA DE MISSAS · NOVEMBRO DE 2026", font=fonte_titulo, fill=verde_escuro)
+        return img, draw, 50 
         
-    draw.rectangle([50, 50, largura - 50, 100], fill=verde_escuro)
-    draw.text((largura/2 - 100, 65), titulo_texto, font=fonte_titulo, fill=branco)
+    img_atual, draw_atual, y_atual = novo_slide()
     
+    dias_unicos = df['Dia'].unique()
     cabecalhos = ["HORA", "COMUNIDADE", "ATIVIDADE", "PRESIDENTE"]
     largura_colunas = [80, 420, 260, 200]
-    y_atual = 120
-    
-    desenhar_tabela(draw, 50, y_atual, cabecalhos, cabecalhos, largura_colunas, verde_escuro, branco)
-    y_atual += 30
-    
-    for i, evento in enumerate(eventos):
-        cor_fundo = verde_claro if i % 2 == 0 else branco
-        linha_dados = [evento['Hora'], evento['Comunidade'], evento['Atividade'], evento['Presidente']]
-        desenhar_tabela(draw, 50, y_atual, cabecalhos, linha_dados, largura_colunas, cor_fundo, verde_escuro)
-        y_atual += 30
-        
-    draw.text((50, altura - 50), "ESCALA DE MISSAS · NOVEMBRO DE 2026", font=fonte_titulo, fill=verde_escuro)
-    return img
-
-def gerar_imagens(df):
-    """Agrupa as imagens e compacta em ZIP."""
-    imagens = []
-    dias_unicos = df['Dia'].unique()
     
     for dia in dias_unicos:
         eventos_do_dia = df[df['Dia'] == dia].to_dict('records')
-        max_eventos_por_slide = 8
-        num_slides = (len(eventos_do_dia) + max_eventos_por_slide - 1) // max_eventos_por_slide
         
-        for slide_idx in range(num_slides):
-            inicio = slide_idx * max_eventos_por_slide
-            fim = inicio + max_eventos_por_slide
-            eventos_slide = eventos_do_dia[inicio:fim]
-            img = criar_imagem_slide(dia, eventos_slide, slide_idx + 1)
-            imagens.append(img)
+        # Estimar espaço que este dia vai ocupar: Título (40) + Cabeçalhos (30) + (linhas * 30) + margem (40)
+        altura_estimada = 40 + 30 + (len(eventos_do_dia) * 30) + 40
+        
+        # Se não couber e a imagem não estiver vazia, cria nova imagem
+        if y_atual + altura_estimada > 1250 and y_atual > 50:
+            imagens.append(img_atual)
+            img_atual, draw_atual, y_atual = novo_slide()
             
+        eventos_restantes = eventos_do_dia.copy()
+        continuacao = False
+        
+        while eventos_restantes:
+            titulo_texto = f"{dia} (Continuação)" if continuacao else dia
+            
+            # Desenhar faixa do dia
+            draw_atual.rectangle([50, y_atual, largura - 50, y_atual + 40], fill=verde_escuro)
+            
+            # Centralizar o título na faixa
+            try:
+                bbox = draw_atual.textbbox((0, 0), titulo_texto, font=fonte_titulo)
+                w_texto = bbox[2] - bbox[0]
+            except AttributeError:
+                w_texto = len(titulo_texto) * 6 
+                
+            x_texto = (largura - w_texto) / 2
+            draw_atual.text((x_texto, y_atual + 12), titulo_texto, font=fonte_titulo, fill=branco)
+            y_atual += 40
+            
+            # Desenhar cabeçalhos das colunas
+            desenhar_tabela(draw_atual, 50, y_atual, cabecalhos, cabecalhos, largura_colunas, verde_escuro, branco)
+            y_atual += 30
+            
+            # Preencher as linhas
+            eventos_processados = 0
+            for i, evento in enumerate(eventos_restantes):
+                if y_atual > 1220: # Limite inferior de segurança antes do rodapé
+                    break
+                    
+                cor_fundo = verde_claro if i % 2 == 0 else branco
+                linha_dados = [evento['Hora'], evento['Comunidade'], evento['Atividade'], evento['Presidente']]
+                desenhar_tabela(draw_atual, 50, y_atual, cabecalhos, linha_dados, largura_colunas, cor_fundo, verde_escuro)
+                y_atual += 30
+                eventos_processados += 1
+            
+            eventos_restantes = eventos_restantes[eventos_processados:]
+            y_atual += 40 # Margem extra após o dia
+            
+            if eventos_restantes:
+                # Se ainda sobrou evento, finaliza este slide e cria outro
+                imagens.append(img_atual)
+                img_atual, draw_atual, y_atual = novo_slide()
+                continuacao = True
+                
+    # Adicionar o último slide gerado
+    if y_atual > 50:
+        imagens.append(img_atual)
+        
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
         for i, img in enumerate(imagens):
