@@ -46,10 +46,19 @@ def extrair_dados_pdf(uploaded_file):
                         atividade = "Missa" 
                         comunidade = ""
                         
-                        match_pres = re.search(r"(Pe\.|Sem\.|Diác\.)\s+.+$", resto_linha, re.IGNORECASE)
+                        # Isolar o Presidente (Agora captura as gralhas 'Pé' e 'PeHélio')
+                        match_pres = re.search(r"\b(Pe\.|Sem\.|Diác\.|Pé\b|PeHélio).*$", resto_linha, re.IGNORECASE)
                         if match_pres:
-                            presidente = match_pres.group(0).strip()
-                            resto_linha = resto_linha.replace(presidente, "").strip()
+                            presidente_bruto = match_pres.group(0).strip()
+                            resto_linha = resto_linha.replace(presidente_bruto, "").strip()
+                            
+                            # Auto-correção das gralhas do PDF
+                            presidente = presidente_bruto.replace("Pé ", "Pe. ").replace("PÉ ", "Pe. ")
+                            presidente = presidente.replace("PeHélio", "Pe. Hélio").replace("PEHÉLIO", "Pe. Hélio")
+                            
+                            # Limpar ponto final acidental no fim do nome (ex: "Pe. Hélio.")
+                            if presidente.endswith(".") and len(presidente.split()) > 1:
+                                presidente = presidente[:-1]
                             
                         palavras_chave_atividade = [
                             "Missa e Novena", "Adoração ao Santíssimo", 
@@ -92,12 +101,10 @@ def carregar_fonte(tamanho):
         return ImageFont.load_default()
 
 def desenhar_tabela(draw, x, y, cabecalhos, linha_dados, largura_colunas, cor_fundo, cor_texto, fonte, altura_base):
-    # Calcula a altura necessária para esta linha baseada na maior quebra de texto
     max_linhas_texto = 1
     textos_quebrados = []
     
     for i, texto in enumerate(linha_dados):
-        # Quebra o texto baseado na largura da coluna (aproximadamente 12 caracteres por 100px)
         caracteres_limite = int((largura_colunas[i] / 100) * 12)
         linhas_do_texto = textwrap.wrap(str(texto), width=caracteres_limite) if str(texto) else [""]
         textos_quebrados.append(linhas_do_texto)
@@ -139,7 +146,6 @@ def gerar_imagens(df, texto_rodape):
     if os.path.exists("logomatriz-site.png"):
         try:
             logo_img = Image.open("logomatriz-site.png").convert("RGBA")
-            # Redimensionar mantendo proporção (altura máx 80px)
             proporcao = 80 / float(logo_img.size[1])
             nova_largura = int((float(logo_img.size[0]) * float(proporcao)))
             logo_img = logo_img.resize((nova_largura, 80), Image.Resampling.LANCZOS)
@@ -151,7 +157,6 @@ def gerar_imagens(df, texto_rodape):
         draw = ImageDraw.Draw(img)
         draw.text((50, altura - 70), f"ESCALA DE MISSAS · {texto_rodape.upper()}", font=fonte_rodape, fill=verde_escuro)
         if logo_img:
-            # Colar logo no canto inferior direito
             img.paste(logo_img, (largura - logo_img.size[0] - 50, altura - 100), logo_img)
         return img, draw, 50 
         
@@ -242,5 +247,3 @@ if uploaded_file is not None:
                 st.download_button(label="Descarregar ZIP", data=zip_data, file_name="escalas.zip", mime="application/zip")
     else:
         st.warning("Não foi possível formatar os dados automaticamente.")
-        st.info("Por favor, copie algumas linhas do texto bruto abaixo e cole no chat para eu ajustar as regras de leitura:")
-        st.text_area("Como o computador leu o PDF:", texto_bruto, height=300)
